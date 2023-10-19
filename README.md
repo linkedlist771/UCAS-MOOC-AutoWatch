@@ -21,7 +21,7 @@
 
 1. [✅国科大慕课自动刷课脚本: 版本1 (greasyfork.org)](https://greasyfork.org/zh-CN/scripts/477309-国科大慕课自动刷课脚本-版本1)
 
-​	 2. [✅国科大慕课自动刷课脚本: 版本2 (greasyfork.org)](https://greasyfork.org/zh-CN/scripts/477310-国科大慕课自动刷课脚本-版本2)
+​	 2. [✅国科大慕课自动刷课脚本: 版本2 (greasyfork.org)](https://greasyfork.org/zh-CN/scripts/477732-国科大慕课自动刷课脚本-版本2)
 
 
 ### 2.使用油猴创建代码（此教程适用于方法1中的链接被举报下架）：
