@@ -1,47 +1,37 @@
 # UCAS-MOOC-AutoWatch
-> This script is designed for the UCAS "First Year English MOOC" automatic course watching, mainly implemented through Tampermonkey scripts for automatic course watching and course selection.
 
-> If you find this project useful or like it, please don't hesitate to give it a thumbs up.
+An automatic course-watching script for UCAS MOOC, implemented as a Tampermonkey userscript.
 
 [中文版](README.md) | [English Version](REAMD-eng.md)
 
-## Main Scripts:
-[script1.js](src/script1.js) is used for automatic course watching, mainly implemented through `setInterval`.
+## Features
 
-[script2.js](src/script2.js) is used for automatic course selection, mainly implemented through `MutationObserver`.
+- ▶️ **Auto video playback**: videos start playing automatically when you enter a course page
+- 📖 **Auto-scroll reading materials**: PDF/PPT courseware is scrolled step by step until the platform confirms the task is complete
+- ⏭️ **Auto page navigation**: moves on to the next chapter once all task points in the current section are done
+- 🧭 **New UI compatible**: supports both the legacy pages and the new `/mooc-ans` page structure
 
-## How to Use:
+## Usage
 
-> First, you need to configure the Tampermonkey script. There are tutorials on mainstream video websites, so I won't go into detail here.
+Just three steps:
 
-### 1. Directly use Tampermonkey to download:
+1. Install the [Tampermonkey](https://www.tampermonkey.net/) browser extension
+2. Install this script: create a new userscript in Tampermonkey, paste the full contents of [script1.js](src/script1.js), and save
+   (also available on [Greasy Fork](https://greasyfork.org/zh-CN/scripts/477309))
+3. **Restart your browser** and open the UCAS online course page — that's it
 
-**Install the two required scripts**
+The script takes care of the rest. No extra configuration needed.
 
-1. [✅UCAS MOOC Auto Course Watching Script: Version 1 (greasyfork.org)](https://greasyfork.org/zh-CN/scripts/477309-国科大慕课自动刷课脚本-版本1)
+## Notes
 
-​	 2. [✅UCAS MOOC Auto Course Watching Script: Version 2 (greasyfork.org)](https://greasyfork.org/zh-CN/scripts/477310-国科大慕课自动刷课脚本-版本2)
+- Video tasks must reach the platform's required viewing duration (e.g. 90%) to count as complete
+- The "100%" in the courseware toolbar is the zoom level, not task progress
+- [script2.js](src/script2.js) is an optional auto course-selection script, independent of this one
 
-### 2. Use Tampermonkey to create code (this tutorial is for when the links in method 1 are reported and removed):
+## Local Testing
 
-**Open the Tampermonkey script page**
+Requires Node.js:
 
-![image-20231013131227594](assets/image-20231013131227594.png)
-
-**Add [script1.js](src/script1.js) and [script2.js](src/script2.js) to custom scripts**
-
-![image-20231013131247416](assets/image-20231013131247416.png)
-
-Just copy and paste. Add both scripts to it.
-
-### 3. Launch the script
-
-1. First, go to the UCAS English MOOC page (enter without the script).
-
-![image-20231013131545509](assets/image-20231013131545509.png)
-
-2. Turn on the script, then refresh the page. If you see the video starting to play automatically, it means it's successful. You can leave it running now.
-
-![image-20231013131645043](assets/image-20231013131645043.png)
-
-> Note: There might be a pop-up window that gets stuck after finishing a chapter. In this case, turn off the script and repeat steps 1 and 2 to solve the issue.
+```bash
+node --test tests/script1.test.js
+```

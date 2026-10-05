@@ -1,11 +1,12 @@
 // ==UserScript==
-// @name         ✅国科大慕课自动刷课脚本: 版本1
+// @name         ✅国科大慕课自动刷课脚本: 版本1-test
 // @namespace     xhygtf
 // @version       2.6.0
 // @description  国科大刷课版本1， 请配合刷课版本2一起使用
 // @author       CodFrm
 // @run-at       document-start
 // @match        *://*/mycourse/studentstudy?*
+// @match        *://*/mooc-ans/mycourse/studentstudy?*
 // @match        *://*/ztnodedetailcontroller/visitnodedetail?*
 // @match        *://*/antispiderShowVerify.ac*
 // @match        *://*/html/processVerify.ac?*
@@ -13,20 +14,135 @@
 // @match        *://*/exam/test/reVersionTestStartNew?*
 // @match        *://*/work/selectWorkQuestionYiPiYue?*
 // @match        *://*/work/doHomeWorkNew?*
-// @match        *://*/ananas/modules/*/index.html?*
+// @match        *://*/ananas/modules/*/index.html*
 // @match        *://*/exam/test?*
 // @match        *://*/course/*.html?*
 // @grant        GM_xmlhttpRequest
+// @grant        GM_getValue
+// @grant        GM_setValue
 // @grant        GM_notification
 // @grant        unsafeWindow
 // @license      MIT
 // ==/UserScript==
 
 
+// In the newer /mooc-ans course view the task iframe can load before the
+// bundled task manager has parsed its attachments. Keep real HTML5 videos
+// playing independently, without touching PDF pages or seeking the timeline.
+(function keepCourseVideoPlaying() {
+    'use strict';
+    if (!/\/(?:mycourse\/studentstudy|ananas\/modules\/video\/index\.html)$/.test(location.pathname)) return;
+    var warned = new WeakSet();
+    function scan(doc, depth) {
+        try {
+            Array.prototype.forEach.call(doc.querySelectorAll('video'), function (video) {
+                if (video.closest && video.closest('.ans-job-finished')) return;
+                if (video.ended || !video.paused || !(video.currentSrc || video.src || video.querySelector('source[src]'))) return;
+                if (localStorage.cx_video_mute !== 'false' && localStorage.video_mute !== 'false') video.muted = true;
+                var playing = video.play();
+                if (playing && playing.catch) playing.catch(function (err) {
+                    if (!warned.has(video)) console.warn('自动播放被浏览器阻止，请手动点击一次播放按钮', err);
+                    warned.add(video);
+                });
+            });
+            if (depth < 3) Array.prototype.forEach.call(doc.querySelectorAll('iframe'), function (frame) {
+                try {
+                    if (frame.closest && frame.closest('.ans-job-finished')) return;
+                    if (frame.contentDocument) scan(frame.contentDocument, depth + 1);
+                } catch (err) {
+                    // Continue with the other frames if this one is cross-origin.
+                }
+            });
+        } catch (err) {
+            // A cross-origin frame must run its own matching userscript.
+        }
+    }
+    function tick() {
+        if (document.hidden || localStorage.cx_auto === 'false' || localStorage.auto === 'false') return;
+        scan(document, 0);
+    }
+    document.addEventListener('DOMContentLoaded', tick, { once: true });
+    setInterval(tick, 3000);
+})();
+
+// PDF/PPT modules are separate iframes. A document attachment is not always
+// exposed in mArg, so CxDocumentTask in the course page may never start.
+// Scroll the viewer in its own frame; the platform still decides completion.
+(function autoScrollCourseware() {
+    'use strict';
+    if (!/\/ananas\/modules\/(?:pdf|ppt)\/index\.html$/.test(location.pathname) || window.top === window) return;
+
+    var hasScrolled = false;
+    var idleTicks = 0;
+    function finished() {
+        try {
+            return !!(window.frameElement && window.frameElement.closest &&
+                window.frameElement.closest('.ans-job-finished'));
+        } catch (err) {
+            return false;
+        }
+    }
+    function scrollFrame(win, depth) {
+        var doc;
+        try {
+            doc = win.document;
+            if (!doc || !doc.body) return false;
+        } catch (err) {
+            return false;
+        }
+        // Some viewers embed their scrolling surface in another same-origin iframe.
+        if (depth < 2) {
+            var frames = doc.querySelectorAll('iframe');
+            for (var i = 0; i < frames.length; i++) {
+                try {
+                    if (frames[i].contentWindow && scrollFrame(frames[i].contentWindow, depth + 1)) return true;
+                } catch (err) {
+                    // Cross-origin documents need their own matching userscript.
+                }
+            }
+        }
+        var root = doc.scrollingElement || doc.documentElement || doc.body;
+        var preferred = doc.querySelectorAll('#viewerContainer, #pdfViewer, .pdfViewer, .pptViewer, [id*="scroll"], [class*="scroll"]');
+        var candidates = Array.prototype.slice.call(preferred);
+        // Fall back to other real scroll containers and finally the document.
+        Array.prototype.forEach.call(doc.querySelectorAll('*'), function (el) {
+            if (candidates.indexOf(el) < 0 && el !== root && el.clientHeight > 64 &&
+                /auto|scroll|overlay/.test(win.getComputedStyle(el).overflowY)) candidates.push(el);
+        });
+        if (root && candidates.indexOf(root) < 0) candidates.push(root);
+        for (var j = 0; j < candidates.length; j++) {
+            var el = candidates[j];
+            if (!el || !el.clientHeight || el.scrollHeight <= el.clientHeight + 2) continue;
+            var end = el.scrollHeight - el.clientHeight;
+            if (el.scrollTop >= end - 2) continue;
+            var oldTop = el.scrollTop;
+            el.scrollTop = Math.min(end, oldTop + Math.max(120, el.clientHeight * 0.8));
+            if (el.scrollTop <= oldTop) continue;
+            el.dispatchEvent(new win.Event('scroll', { bubbles: true }));
+            return true;
+        }
+        return false;
+    }
+    function tick() {
+        if (finished()) return clearInterval(timer);
+        if (document.hidden || localStorage.cx_auto === 'false' || localStorage.auto === 'false') return;
+        if (scrollFrame(window, 0)) {
+            if (!hasScrolled) console.info('开始自动滑动 PDF/PPT 课件');
+            hasScrolled = true;
+            idleTicks = 0;
+        } else if (++idleTicks === 10) {
+            if (hasScrolled) console.info('课件已滑至底部，等待平台确认任务完成');
+            else console.warn('未找到可滑动的 PDF/PPT 阅读区域，请检查课件 iframe 是否已加载');
+        }
+    }
+    var timer = setInterval(tick, 1200);
+    document.addEventListener('DOMContentLoaded', tick, { once: true });
+})();
+
+// The legacy bundle in this wrapper is retained but not started. The active
+// task logic lives in the second bundle near the end of this file.
 (function() {
     'use strict';
-
-    let isScript1Running = true;
 
     function script1() {
             let nopanel = false; //不显示一切信息，仅保留自动答题功能，不会显示题库答案数、答案、右侧面板，适合考试用。此模式会自动获取答案并填写,请确保您的积分充足。
@@ -12958,12 +13074,9 @@
         });
     }
 
-    setInterval(() => {
-        isScript1Running = !isScript1Running;
-    }, 2 * 60 * 1000); // 每2分钟切换一次
-
-    setInterval(script1, 100); // 脚本1的执行间隔
-    setInterval(script2, 100); // 脚本2的执行间隔
+    // The maintained, bundled implementation below is started once. Re-running
+    // both bundled implementations every 100 ms installs duplicate listeners and
+    // resets task state before a chapter can finish.
 
 })();
 
@@ -12976,6 +13089,9 @@
 
     Promise.all([
         (async function(){
+            // Do not execute the cached remote copy: it can override the locally
+            // maintained task and navigation fixes below.
+            return;
 // ==UserScript==
 (function(){
     let nopanel = false; //不显示一切信息，仅保留自动答题功能，不会显示题库答案数、答案、右侧面板，适合考试用。此模式会自动获取答案并填写,请确保您的积分充足。
@@ -23530,16 +23646,35 @@ var CxCourse = /** @class */ (function (_super) {
         var _this = this;
         return new Promise(function (resolve) {
             var first = true;
-            document.addEventListener("load", function (ev) {
-                var el = (ev.srcElement || ev.target);
-                if (el.id == "iframe") {
-                    application_1.Application.App.log.Info("超星新窗口加载");
-                    _this.OperateCard(el);
-                    // 超星会有多次加载,所以使用一个flag变量,只回调一次
-                    first && resolve(undefined);
-                    first = false;
+            var handled = new WeakMap();
+            var onFrame = function (el) {
+                try {
+                    var doc = el.contentDocument;
+                    if (!doc || doc.readyState == 'loading' || handled.get(el) == doc) return;
+                    if (el.id != 'iframe' && !el.contentWindow.mArg) return;
+                    handled.set(el, doc);
+                    application_1.Application.App.log.Info('超星新窗口加载');
+                    _this.OperateCard(el).then(function () {
+                        if (first && _this.taskList) {
+                            first = false;
+                            resolve(undefined);
+                        } else if (!_this.taskList) {
+                            handled.delete(el); // mArg may not be available until a later load.
+                        }
+                    }).catch(function (err) {
+                        handled.delete(el);
+                        application_1.Application.App.log.Warn('任务卡尚未就绪', err);
+                    });
+                } catch (err) {
+                    application_1.Application.App.log.Warn('无法读取任务 iframe', err);
                 }
+            };
+            document.addEventListener('load', function (ev) {
+                var el = ev.target;
+                if (el && el.tagName == 'IFRAME') onFrame(el);
             }, true);
+            // document-start is not guaranteed in Firefox: handle already-loaded frames.
+            Array.prototype.forEach.call(document.querySelectorAll('iframe'), onFrame);
         });
     };
     CxCourse.prototype.Stop = function () {
@@ -23593,7 +23728,7 @@ var CxCourse = /** @class */ (function (_super) {
                         this.attachments = iframeWindow.mArg.attachments;
                         this.taskList = new Array();
                         _loop_1 = function (index) {
-                            var value, task;
+                            var value, task, taskIndex;
                             return __generator(this, function (_a) {
                                 switch (_a.label) {
                                     case 0:
@@ -23605,10 +23740,14 @@ var CxCourse = /** @class */ (function (_super) {
                                             return [2 /*return*/, "continue"];
                                         }
                                         task.jobIndex = index;
+                                        taskIndex = this_1.taskList.length;
                                         this_1.taskList.push(task);
                                         task.addEventListener("complete", function () {
-                                            _this.callEvent("taskComplete", index, task);
+                                            _this.callEvent("taskComplete", taskIndex, task);
                                         });
+                                        // A finished attachment does not need its player initialized;
+                                        // on review pages the video element may never be created.
+                                        if (task.Done()) return [2 /*return*/];
                                         return [4 /*yield*/, task.Init()];
                                     case 1:
                                         _a.sent();
@@ -23640,6 +23779,7 @@ var CxCourse = /** @class */ (function (_super) {
         //感觉奇葩的方法...
         var els = document.querySelectorAll("div.ncells > *:not(.currents) > .orange01");
         var now = document.querySelector("div.ncells > .currents");
+        if (!now) return null;
         for (var i = 0; i < els.length; i++) {
             if (now.getBoundingClientRect().top < els[i].getBoundingClientRect().top) {
                 return els[i];
@@ -23649,26 +23789,53 @@ var CxCourse = /** @class */ (function (_super) {
     };
     CxCourse.prototype.nextPage = function (num) {
         var _this = this;
-        var el = document.querySelector("span.currents ~ span") || document.querySelector(".prev_next.next");
-        if (el != undefined) {
-            return el.click();
-        }
-        //只往后执行
-        el = this.afterPage();
-        if (el == undefined) {
-            //进行有锁任务查找
-            if (document.querySelector("div.ncells > *:not(.currents) > .lock") == undefined) {
-                return this.callEvent("complete");
+        var isLocked = function (row) {
+            return (row.matches && row.matches('.lock, .disabled, [aria-disabled="true"]')) || !!row.querySelector('.lock, .locked');
+        };
+        var waitForUnlock = function () {
+            if (num >= 5) return _this.callEvent('error', '被锁卡住了,请手动处理');
+            application_1.Application.App.log.Info('等待解锁');
+            setTimeout(function () { _this.nextPage((num || 0) + 1); }, 5000);
+        };
+        // New course view: finish the remaining cards in this chapter first.
+        var active = document.querySelector('.prev_ul li.active');
+        if (active) {
+            var nextCard = active.nextElementSibling;
+            while (nextCard) {
+                if (!isLocked(nextCard)) return nextCard.click();
+                nextCard = nextCard.nextElementSibling;
             }
-            return setTimeout(function () {
-                if (num > 5) {
-                    return _this.callEvent("error", "被锁卡住了,请手动处理");
-                }
-                application_1.Application.App.log.Info("等待解锁");
-                _this.nextPage(num + 1);
-            }, 5000);
         }
-        el.parentElement.querySelector("a>span").click();
+        // Then select the next unfinished, unlocked chapter in the new catalog.
+        var selected = document.querySelector('.posCatalog_active');
+        if (selected) {
+            var rows = Array.prototype.slice.call(document.querySelectorAll('.posCatalog_select'));
+            var current = rows.indexOf(selected.closest('.posCatalog_select') || selected);
+            if (current >= 0) {
+                var remaining = rows.slice(current + 1);
+                var open = remaining.filter(function (row) { return !isLocked(row); });
+                var target = open.filter(function (row) { return row.querySelector('.jobUnfinishCount'); })[0];
+                if (!target && !rows.some(function (row) { return row.querySelector('.jobUnfinishCount'); })) {
+                    target = open[0]; // Older catalogs have no unfinished-count marker.
+                }
+                if (target) {
+                    var count = target.querySelector('.jobUnfinishCount');
+                    return (count && count.parentElement.querySelector('span') || target.querySelector('span') || target).click();
+                }
+                if (remaining.some(isLocked)) return waitForUnlock();
+                return this.callEvent('complete');
+            }
+        }
+        // Original course view.
+        var el = document.querySelector('span.currents ~ span') || document.querySelector('.prev_next.next');
+        if (el && !isLocked(el)) return el.click();
+        el = this.afterPage();
+        if (el) {
+            var link = el.parentElement.querySelector('a>span');
+            if (link) return link.click();
+        }
+        if (document.querySelector('div.ncells > *:not(.currents) > .lock')) return waitForUnlock();
+        this.callEvent('complete');
     };
     return CxCourse;
 }(event_1.EventListener));
@@ -23790,8 +23957,11 @@ var TaskFactory = /** @class */ (function () {
     function TaskFactory() {
     }
     TaskFactory.CreateCourseTask = function (context, taskinfo) {
-        if (taskinfo.property.module == "insertaudio") {
+        var module = taskinfo.property && taskinfo.property.module;
+        if (module == "insertaudio") {
             taskinfo.type = "audio";
+        } else if (taskinfo.type == "ppt" || taskinfo.type == "pdf" || module == "ppt" || module == "pdf") {
+            taskinfo.type = "document";
         }
         //TODO:优化
         if (taskinfo.type != "video" && taskinfo.type != "workid" && taskinfo.type != "document"
@@ -23803,11 +23973,21 @@ var TaskFactory = /** @class */ (function () {
         var prev;
         if (taskIframe == undefined) {
             taskIframe = context.document.querySelector("iframe[data*='" + taskinfo.property.mid + "'],iframe[objectid='" + taskinfo.property.objectid + "']");
+            if (!taskIframe && taskinfo.type == "document") {
+                // Some PPT/PDF tasks have no jobid or objectid on their iframe.
+                var documents = context.document.querySelectorAll('iframe[src*="/ppt/index.html"], iframe[src*="/pdf/index.html"]');
+                if (documents.length == 1) taskIframe = documents[0];
+            }
+            if (!taskIframe) return null;
             prev = document.createElement("div");
             taskIframe.parentElement.prepend(prev);
         }
         else {
             prev = taskIframe.previousElementSibling;
+            if (!prev) {
+                prev = document.createElement("div");
+                taskIframe.parentElement.prepend(prev);
+            }
         }
         switch (taskinfo.type) {
             case "video": {
@@ -24669,19 +24849,76 @@ var CxDocumentTask = /** @class */ (function (_super) {
     }
     CxDocumentTask.prototype.Start = function () {
         var _this = this;
-        return new Promise(function (resolve) {
-            var next = function () {
-                var el = _this.context.document.querySelector(".imglook > .mkeRbtn");
-                if (el.style.visibility == "hidden") {
-                    _this.callEvent("complete");
-                    return;
+        if (this.running || this.Done()) {
+            return Promise.resolve();
+        }
+        this.running = true;
+        var reachedEnd = false;
+        var waitAtBottom = 0;
+        var finished = function () {
+            var frame = _this.context.frameElement;
+            return !!(frame && frame.closest && frame.closest('.ans-job-finished'));
+        };
+        var complete = function () {
+            if (!_this.running) return;
+            _this.running = false;
+            _this.context.clearTimeout(_this.time);
+            _this.callEvent('complete');
+        };
+        // New courseware uses scrollable viewers instead of the old next-page button.
+        // Scroll by viewport-sized steps so the viewer's progress/scroll handlers run.
+        var scrollDocument = function (win, depth) {
+            var doc;
+            try {
+                doc = win.document;
+            } catch (err) {
+                return false; // Cross-origin embedded resources cannot be inspected.
+            }
+            var moved = false;
+            if (depth < 2) {
+                Array.prototype.forEach.call(doc.querySelectorAll('iframe'), function (frame) {
+                    if (frame.contentWindow) moved = scrollDocument(frame.contentWindow, depth + 1) || moved;
+                });
+            }
+            var root = doc.scrollingElement || doc.documentElement || doc.body;
+            var candidates = [root];
+            Array.prototype.push.apply(candidates, doc.querySelectorAll('*'));
+            candidates.forEach(function (el) {
+                if (moved || !el || !el.clientHeight || el.scrollHeight <= el.clientHeight + 2) return;
+                if (el !== root && !/auto|scroll|overlay/.test(win.getComputedStyle(el).overflowY)) return;
+                var end = el.scrollHeight - el.clientHeight;
+                if (el.scrollTop >= end - 2) return;
+                el.scrollTop = Math.min(end, el.scrollTop + Math.max(100, el.clientHeight * 0.8));
+                el.dispatchEvent(new win.Event('scroll', { bubbles: true }));
+                moved = true;
+            });
+            return moved;
+        };
+        var next = function () {
+            if (!_this.running) return;
+            if (finished()) return complete();
+            if (application_1.Application.App.config.auto) {
+                var moved = scrollDocument(_this.context, 0);
+                reachedEnd = reachedEnd || moved;
+                if (!moved) {
+                    var button = _this.context.document.querySelector('.imglook > .mkeRbtn');
+                    if (button) {
+                        if (button.hidden || button.disabled || button.style.visibility == 'hidden' ||
+                            button.getAttribute('aria-disabled') == 'true') {
+                            return complete(); // Old slideshow: the final page has been reached.
+                        }
+                        button.click();
+                    } else if (reachedEnd && ++waitAtBottom == 30) {
+                        application_1.Application.App.log.Warn('课件已滑至末尾，仍需等待平台记录观看时长和完成状态');
+                    }
                 }
-                el.click();
-                _this.time = _this.context.setTimeout(next, utils_1.randNumber(1, 5) * 1000);
-                resolve();
-            };
-            _this.time = _this.context.setTimeout(next, utils_1.randNumber(1, 5) * 1000);
-        });
+            }
+            // For scroll-only courseware, wait for the platform's finished marker.
+            // Reaching the bottom alone is not evidence that progress was recorded.
+            _this.time = _this.context.setTimeout(next, 1000);
+        };
+        _this.time = _this.context.setTimeout(next, 1000);
+        return Promise.resolve();
     };
     CxDocumentTask.prototype.Type = function () {
         return "document";
@@ -25537,7 +25774,18 @@ var Video = /** @class */ (function (_super) {
         return _super !== null && _super.apply(this, arguments) || this;
     }
     Video.prototype.queryVideo = function () {
-        return this.context.document.getElementById("video_html5_api");
+        var doc = this.context.document;
+        var video = doc.getElementById("video_html5_api") || doc.querySelector('video');
+        if (video) return video;
+        // The newer player sometimes nests the HTML5 element in a child frame.
+        Array.prototype.forEach.call(doc.querySelectorAll('iframe'), function (frame) {
+            try {
+                if (!video && frame.contentDocument) video = frame.contentDocument.querySelector('video');
+            } catch (err) {
+                // Cross-origin frames cannot be inspected here.
+            }
+        });
+        return video;
     };
     Video.prototype.Init = function () {
         var _this = this;
@@ -25547,7 +25795,8 @@ var Video = /** @class */ (function (_super) {
                 try {
                     var video = _this.queryVideo();
                     if (video == undefined) {
-                        if (_this.context.document.querySelector("#reader").innerHTML.indexOf("您没有安装flashplayer") >= 0) {
+                        var reader = _this.context.document.querySelector("#reader");
+                        if (reader && reader.textContent.indexOf("您没有安装flashplayer") >= 0) {
                             _this.context.clearInterval(timer);
                             _this.flash = true;
                             resolve(undefined);
@@ -25794,6 +26043,8 @@ var mooc = /** @class */ (function () {
             application_1.Application.App.log.Fatal(msg);
             alert(msg);
         });
+        // The first iframe may finish loading before these listeners are installed.
+        if (application_1.Application.App.config.auto) this.runTask(moocTask);
     };
     mooc.prototype.runTask = function (moocTask) {
         return __awaiter(this, void 0, void 0, function () {
